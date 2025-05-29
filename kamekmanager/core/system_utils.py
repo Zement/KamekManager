@@ -9,7 +9,7 @@ import shutil
 # import requests 
 import zipfile
 
-from common import constants # Assuming constants.py is in a sibling 'common' directory
+from kamekmanager.common import constants # Assuming constants.py is in a sibling 'common' directory
 
 def check_admin_privileges() -> bool:
     """

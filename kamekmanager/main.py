@@ -12,8 +12,8 @@ import os
 # # A more robust way if you make kamekmanager a package:
 # # from .core import system_utils
 
-from core import system_utils
-from common import constants
+from kamekmanager.core import system_utils
+from kamekmanager.common import constants
 
 def main():
     """Main entry point for the KamekManager CLI."""
