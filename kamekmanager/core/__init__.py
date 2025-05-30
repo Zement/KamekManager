@@ -1,7 +1,6 @@
 # kamekmanager/core/__init__.py
 # This file makes Python treat the `core` directory as a package.
 
-# Make key functions easily accessible via `from core import ...`
 from .system_utils import (
     check_admin_privileges,
     get_user_data_directory,
@@ -15,15 +14,12 @@ from .system_utils import (
     prompt_user_for_confirmation
 )
 
-from .python_env import ( # New functions
+from .python_env import (
     check_python_installation,
-    install_python, # Placeholder for now
-    ensure_python_in_path, # Placeholder for now
-    check_and_install_pip_packages
+    install_python_interactive, 
+    upgrade_python_interactive, 
+    ensure_python_in_path, 
+    check_and_install_pip_packages,
+    get_latest_python_download_url, 
+    update_pip 
 )
-
-# You might also want to define __all__ if you want `from core import *` to behave predictably
-# __all__ = [
-# "check_admin_privileges", "get_user_data_directory", ...
-# "check_python_installation", ...
-# ]
