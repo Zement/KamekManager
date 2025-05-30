@@ -18,15 +18,16 @@ try:
 except ImportError:
     REQUESTS_AVAILABLE = False
 
-try:
-    from bs4 import BeautifulSoup
-    BS4_AVAILABLE = True
-except ImportError:
-    BS4_AVAILABLE = False # Keep for potential fallback scraping if API fails
+# BS4 is no longer used in the primary path for get_latest_python_download_url
+# try:
+#     from bs4 import BeautifulSoup
+#     BS4_AVAILABLE = True
+# except ImportError:
+#     BS4_AVAILABLE = False 
 
 def get_python_executable_info(python_exe_path_str: str) -> dict | None:
     """Gets version and path for a given Python executable."""
-    if not python_exe_path_str: # Handle empty string case
+    if not python_exe_path_str: 
         return None
     python_exe = pathlib.Path(python_exe_path_str)
     if not python_exe.is_file():
@@ -90,175 +91,125 @@ def _get_latest_python_version_from_api() -> str | None:
     """Helper to get the latest stable Python version string from endoflife.date API."""
     if not REQUESTS_AVAILABLE:
         print("Library 'requests' is required to fetch latest Python version from API.", file=sys.stderr)
+        print("Please install it: pip install requests")
         return None
     try:
-        api_url = "https://endoflife.date/api/python.json"
+        api_url = "[https://endoflife.date/api/python.json](https://endoflife.date/api/python.json)" # Corrected URL
         print(f"Fetching latest Python version info from: {api_url}")
-        response = requests.get(api_url, timeout=10)
+        headers = {'User-Agent': f'{constants.APP_NAME}/{constants.APP_VERSION}'}
+        response = requests.get(api_url, timeout=10, headers=headers)
         response.raise_for_status()
         data = response.json()
-        # The first entry is usually the newest release cycle still supported.
-        # We need to find the one that is not EOL and is the latest.
-        # The API sorts them by release date, so data[0] is the newest *cycle*.
-        # We need its 'latest' field.
+        
         if data and isinstance(data, list) and len(data) > 0:
-            # Find the first non-EOL cycle, which should be the latest stable major.minor
             latest_cycle_info = None
-            for cycle_info in data:
-                if isinstance(cycle_info.get("eol"), bool) and cycle_info["eol"] is False: # Actively supported cycle
+            # Iterate to find the newest cycle that is not EOL (eol: false)
+            # or the absolute newest if all are EOL (though unlikely for Python's main entry)
+            for cycle_info in data: # API sorts by release date, newest first
+                if isinstance(cycle_info.get("eol"), bool) and cycle_info["eol"] is False:
                     latest_cycle_info = cycle_info
                     break
-                elif isinstance(cycle_info.get("eol"), str): # Date string, check if it's in the future or very recent
-                     # This part can be complex if we need to parse dates.
-                     # For now, assume the first one with "eol": false is good, or the absolute first if none.
-                     latest_cycle_info = cycle_info # Fallback to newest listed if no "eol:false"
-                     break
+                # If no cycle has "eol: false", we might take the first one as the most recent.
+                # However, the API should ideally always have a current non-EOL for Python.
+                # If we only find EOL cycles, it's safer to indicate an issue or use a fallback.
+            
+            if not latest_cycle_info and data: # Fallback to the very first entry if no "eol: false" found
+                print("Warning: Could not find a definitively non-EOL Python cycle from API, using the newest listed.", file=sys.stderr)
+                latest_cycle_info = data[0]
 
 
             if latest_cycle_info and "latest" in latest_cycle_info:
                 latest_version_str = latest_cycle_info["latest"]
                 print(f"Latest stable Python version from API: {latest_version_str}")
                 return latest_version_str
-        print("Could not parse latest Python version from API response.", file=sys.stderr)
+        print("Could not parse latest Python version from API response structure.", file=sys.stderr)
         return None
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching latest Python version from API: {e}", file=sys.stderr)
+        print(f"Error fetching latest Python version from API ({api_url}): {e}", file=sys.stderr)
         return None
-    except Exception as e: # Catch other errors like JSONDecodeError
+    except Exception as e: 
         print(f"Unexpected error processing API response for Python version: {e}", file=sys.stderr)
         return None
 
-def get_latest_python_download_url(os_filter="win64") -> str | None:
+def get_latest_python_download_url(os_filter="win64", version_str_override: str | None = None) -> str | None:
     """
-    Attempts to find the download URL for the latest stable Python installer.
+    Attempts to find the download URL for the latest (or specified) stable Python installer.
     Uses endoflife.date API for version, then constructs FTP URL.
-    Falls back to scraping python.org if API fails or for more specific links if needed.
+    Args:
+        os_filter: "win64", "win32", "macos".
+        version_str_override: If provided, uses this version string instead of fetching the latest.
+    Returns:
+        The direct download URL string or None if not found.
     """
-    latest_version_str = _get_latest_python_version_from_api()
+    latest_version_str = version_str_override if version_str_override else _get_latest_python_version_from_api()
 
     if latest_version_str:
-        # Construct direct FTP URL based on common patterns
-        # Example: [https://www.python.org/ftp/python/3.12.3/python-3.12.3-amd64.exe](https://www.python.org/ftp/python/3.12.3/python-3.12.3-amd64.exe)
-        base_ftp_url = "https://www.python.org/ftp/python"
+        base_ftp_url = constants.PYTHON_FTP_BASE_URL # Corrected URL
         filename = ""
         if os_filter == "win64":
             filename = f"python-{latest_version_str}-amd64.exe"
         elif os_filter == "win32":
-            filename = f"python-{latest_version_str}.exe" # 32-bit often doesn't have -win32 suffix explicitly
+            # For 3.9+, 32-bit is just .exe, for <3.9 it was python-X.Y.Z.msi or .exe
+            # Let's assume .exe for simplicity, may need refinement for older versions if targeted
+            filename = f"python-{latest_version_str}.exe" 
         elif os_filter == "macos":
-            # macOS universal2 installer is common
-            # Example: python-3.12.3-macos11.pkg (macos11 or macos10.9 for older)
-            # This part is trickier as the macOS filename can vary more.
-            # We might need to scrape the specific version page or use the index.json for macOS.
-            # For now, let's focus on Windows and provide a placeholder for macOS.
-            print(f"MacOS installer URL construction for version {latest_version_str} is complex; consider manual URL or scraping fallback.", file=sys.stderr)
-            filename = f"python-{latest_version_str}-macos11.pkg" # Educated guess
+            # Example: python-3.12.3-macos11.pkg
+            # The "macosXX" part can vary. For very new versions, it's often macos11.
+            # This is a best guess.
+            v_tuple = tuple(map(int, latest_version_str.split('.')))
+            macos_ver_suffix = "macos11" # Default for newer Pythons
+            if v_tuple < (3, 9): # Older Pythons might use macos10.9
+                macos_ver_suffix = "macos10.9"
+            filename = f"python-{latest_version_str}-{macos_ver_suffix}.pkg"
         else:
             print(f"Unsupported OS filter for direct FTP URL: {os_filter}", file=sys.stderr)
             return constants.PYTHON_INSTALLER_URL_WIN_FALLBACK
 
         if filename:
             direct_url = f"{base_ftp_url}/{latest_version_str}/{filename}"
-            print(f"Constructed direct download URL: {direct_url}")
-            # We could add a HEAD request here to check if the URL actually exists before returning it.
-            return direct_url
+            print(f"Constructed download URL: {direct_url}")
+            # Optional: Add a HEAD request here to check if the URL actually exists
+            # if REQUESTS_AVAILABLE:
+            #     try:
+            #         head_resp = requests.head(direct_url, timeout=5)
+            #         if head_resp.status_code == 200:
+            #             return direct_url
+            #         else:
+            #             print(f"Warning: Constructed URL {direct_url} returned status {head_resp.status_code}", file=sys.stderr)
+            #             return constants.PYTHON_INSTALLER_URL_WIN_FALLBACK # Fallback if constructed URL is bad
+            #     except requests.exceptions.RequestException:
+            #         print(f"Warning: Could not verify constructed URL {direct_url}", file=sys.stderr)
+            #         return constants.PYTHON_INSTALLER_URL_WIN_FALLBACK # Fallback
+            return direct_url # Return constructed URL directly for now
 
-    # Fallback to scraping if API/direct construction fails (original method, slightly adjusted)
-    print("Falling back to scraping python.org to find download URL...", file=sys.stderr)
-    if not BS4_AVAILABLE or not REQUESTS_AVAILABLE: # Ensure requests is also checked for scraping
-        print("Libraries 'requests' and 'beautifulsoup4' are required for scraping python.org.", file=sys.stderr)
-        return constants.PYTHON_INSTALLER_URL_WIN_FALLBACK
-
-    base_url_scrape = "https://www.python.org"
-    downloads_url_scrape = f"{base_url_scrape}/downloads/"
-    try:
-        print(f"Fetching {downloads_url_scrape} (scraping fallback)...")
-        headers = {'User-Agent': 'Mozilla/5.0 KamekManager'}
-        response = requests.get(downloads_url_scrape, headers=headers, timeout=15)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-
-        # Find the link to the specific version's page (e.g., /downloads/release/python-3123/)
-        # The main download button often links to this page.
-        latest_version_page_link = soup.find('a', class_='button', string=re.compile(r"Download Python \d+\.\d+(\.\d+)?"))
-        if not latest_version_page_link or not latest_version_page_link.get('href'):
-            print("Scraping: Could not find the main download button link.", file=sys.stderr)
-            return constants.PYTHON_INSTALLER_URL_WIN_FALLBACK
-
-        version_page_url_segment = latest_version_page_link['href']
-        if not version_page_url_segment.startswith('/downloads/release/python-'):
-            print(f"Scraping: Main download button link '{version_page_url_segment}' does not look like a release page link.", file=sys.stderr)
-            return constants.PYTHON_INSTALLER_URL_WIN_FALLBACK
-        
-        version_page_url = base_url_scrape + version_page_url_segment
-        
-        print(f"Fetching version specific page for scraping: {version_page_url}")
-        response = requests.get(version_page_url, headers=headers, timeout=15)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-
-        link_text_pattern = re.compile(r"Windows installer \(\s*64-bit\s*\)", re.IGNORECASE) if os_filter == "win64" else \
-                            re.compile(r"Windows installer \(\s*32-bit\s*\)", re.IGNORECASE) if os_filter == "win32" else \
-                            re.compile(r"macOS\s+64-bit\s+(universal2\s+)?installer", re.IGNORECASE) if os_filter == "macos" else None
-
-        if not link_text_pattern:
-            print(f"Scraping: Unsupported OS filter: {os_filter}", file=sys.stderr)
-            return constants.PYTHON_INSTALLER_URL_WIN_FALLBACK
-
-        # Find the "Files" table
-        files_table = soup.find('table', class_='files')
-        if not files_table: # More generic search if class name changes
-            release_content = soup.find('article', role='article') # Common container for release notes
-            if release_content:
-                files_table = release_content.find('table')
-
-        if files_table:
-            for anchor in files_table.find_all('a', string=link_text_pattern):
-                if anchor.get('href') and anchor['href'].endswith(('.exe', '.pkg')): # Ensure it's a downloadable file
-                    installer_url = anchor['href']
-                    # URLs on the release page are usually absolute
-                    if installer_url.startswith('http'):
-                        print(f"Scraping: Found installer URL: {installer_url}")
-                        return installer_url
-        
-        print(f"Scraping: Could not find a specific '{link_text_pattern.pattern}' link on {version_page_url}", file=sys.stderr)
-        return constants.PYTHON_INSTALLER_URL_WIN_FALLBACK
-
-    except requests.exceptions.RequestException as e:
-        print(f"Scraping fallback error: {e}", file=sys.stderr)
-        return constants.PYTHON_INSTALLER_URL_WIN_FALLBACK
-    except Exception as e:
-        print(f"Unexpected error during scraping fallback: {e}", file=sys.stderr)
-        return constants.PYTHON_INSTALLER_URL_WIN_FALLBACK
+    print("Could not determine Python version for download URL construction.", file=sys.stderr)
+    return constants.PYTHON_INSTALLER_URL_WIN_FALLBACK
 
 
 def install_python_interactive(version_or_url: str, download_dir: pathlib.Path) -> bool:
     installer_url = None
     if version_or_url.lower() == "latest":
         print("Attempting to find the latest Python installer URL...")
-        installer_url = get_latest_python_download_url()
+        installer_url = get_latest_python_download_url() # Defaults to win64
     elif version_or_url.startswith("http://") or version_or_url.startswith("https://"):
         installer_url = version_or_url
     else: 
-        # Try to construct a direct FTP URL for a specific version
-        base_ftp_url = "[https://www.python.org/ftp/python](https://www.python.org/ftp/python)"
-        # Basic assumption for Windows 64-bit filename
-        filename = f"python-{version_or_url}-amd64.exe" 
-        installer_url = f"{base_ftp_url}/{version_or_url}/{filename}"
-        print(f"Constructed URL for version {version_or_url}: {installer_url}")
-        # Could add a HEAD request here to check validity
+        # Assume version_or_url is a version string like "3.10.5"
+        print(f"Attempting to find installer URL for Python version: {version_or_url}")
+        installer_url = get_latest_python_download_url(version_str_override=version_or_url)
 
     if not installer_url:
         print("Could not determine Python installer URL.", file=sys.stderr)
         return False
 
     installer_name = installer_url.split('/')[-1]
+    # Ensure a reasonable default filename if the URL is weird
     if not (installer_name.endswith((".exe", ".pkg", ".dmg")) or "python_installer_downloaded" in installer_name):
         print(f"Warning: Download URL does not appear to point to a standard installer file: {installer_name}", file=sys.stderr)
         original_extension = pathlib.Path(installer_name).suffix
-        installer_name = f"python_installer_{version_or_url.replace('.', '_')}{original_extension if original_extension else '.exe'}"
+        safe_version_or_url = re.sub(r'[^\w\.-]', '_', version_or_url) # Sanitize for filename
+        installer_name = f"python_installer_{safe_version_or_url}{original_extension if original_extension else '.exe'}"
         print(f"Using generic filename: {installer_name}")
-
 
     installer_path = download_dir / installer_name
 
@@ -276,11 +227,18 @@ def install_python_interactive(version_or_url: str, download_dir: pathlib.Path) 
     if os.name == 'nt':
         try:
             print(f"Attempting to launch installer: {installer_path}...")
-            os.startfile(installer_path)
+            os.startfile(installer_path) # This is for Windows
             print("Installer launched. Please follow its instructions.")
         except Exception as e:
             print(f"Could not automatically launch the installer: {e}", file=sys.stderr)
             print(f"Please navigate to '{installer_path.parent}' and run '{installer_path.name}' manually.")
+    elif os.name == 'posix': # macOS
+        # For .pkg files on macOS, `open` command can be used
+        if installer_path.suffix == '.pkg':
+            print(f"Attempting to open installer with default application: {installer_path}")
+            system_utils.run_command(['open', str(installer_path)], check_return_code=False)
+        else:
+            print(f"Please run the downloaded installer from: {installer_path}")
     else:
         print(f"Please run the downloaded installer from: {installer_path}")
     
@@ -302,7 +260,7 @@ def update_pip(python_exe_path_str: str) -> bool:
         return True
     else:
         print("Failed to upgrade pip.", file=sys.stderr)
-        stderr_output = ((result.stdout or "") + (result.stderr or "")).lower() # Combine outputs for check
+        stderr_output = ((result.stdout or "") + (result.stderr or "")).lower() 
         if result and result.returncode !=0 and ("permission denied" in stderr_output or "environmenterror" in stderr_output or "access is denied" in stderr_output):
              print("Attempting pip upgrade with --user flag due to potential permission issues...")
              pip_upgrade_cmd_user = [python_info['executable'], "-m", "pip", "install", "--upgrade", "pip", "--user"]
@@ -400,7 +358,13 @@ def upgrade_python_interactive(old_python_exe_str: str, download_dir: pathlib.Pa
         print("New Python path not provided. Cannot reinstall packages.", file=sys.stderr)
         print(f"Your old package list was:\n{requirements_content}")
         return False 
-    new_python_exe = get_python_executable_info(new_python_exe_str)['executable'] 
+    
+    new_python_exe_info = get_python_executable_info(new_python_exe_str)
+    if not new_python_exe_info: # Should not happen if loop above worked, but defensive check
+        print(f"Critical error: Could not re-verify new Python path {new_python_exe_str}", file=sys.stderr)
+        return False
+    new_python_exe = new_python_exe_info['executable']
+
     print(f"\nStep 3: Updating pip for the new Python at {new_python_exe}...")
     if not update_pip(new_python_exe):
         print("Warning: Failed to update pip for the new Python.", file=sys.stderr)
@@ -426,10 +390,8 @@ def upgrade_python_interactive(old_python_exe_str: str, download_dir: pathlib.Pa
             print(f"Note: Could not delete temporary requirements file {tmp_req_file_path_str}: {e_del}", file=sys.stderr)
     print("\n--- Python Upgrade Process Summary ---")
     print(f"Old Python: {old_python_exe} (Version: {old_python_info['version_str']})")
-    if new_python_exe_str:
-        new_py_info_final = get_python_executable_info(new_python_exe_str)
-        if new_py_info_final:
-             print(f"New Python: {new_py_info_final['executable']} (Version: {new_py_info_final['version_str']})")
+    if new_python_exe_str and new_python_exe_info: # Check new_python_exe_info as well
+         print(f"New Python: {new_python_exe_info['executable']} (Version: {new_python_exe_info['version_str']})")
     else:
         print("New Python installation was guided, but path not confirmed for package migration.")
     if requirements_content: print("Attempted to migrate packages.")

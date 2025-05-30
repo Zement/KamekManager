@@ -86,14 +86,12 @@ def main():
         return
 
     if args.install_pip_packages is not None:
-        # This command typically doesn't need admin unless Python itself is in a protected location.
-        # The check_and_install_pip_packages function uses sys.executable, so it acts on the current Python.
         packages_to_install = args.install_pip_packages if args.install_pip_packages else constants.PIP_PACKAGES
         if not packages_to_install:
              print("No packages specified for installation and no default packages defined.")
         else:
             print(f"Checking and installing pip packages for current Python ({sys.executable}): {', '.join(packages_to_install)}")
-            if not python_env.update_pip(sys.executable): # Ensure pip is up-to-date first
+            if not python_env.update_pip(sys.executable): 
                  print("Failed to update pip. Package installation might fail or use an old version.")
             success = python_env.check_and_install_pip_packages(sys.executable, packages_to_install)
             print("Pip package check/installation process completed." if success else "Pip package check/installation encountered issues.")
