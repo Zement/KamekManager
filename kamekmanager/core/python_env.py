@@ -6,8 +6,9 @@ import pathlib
 import os 
 import re 
 import tempfile 
-import shutil 
+import shutil
 
+from datetime import datetime
 from kamekmanager.core import system_utils 
 from kamekmanager.common import constants
 
@@ -94,7 +95,7 @@ def _get_latest_python_version_from_api() -> str | None:
         print("Please install it: pip install requests")
         return None
     try:
-        api_url = "[https://endoflife.date/api/python.json](https://endoflife.date/api/python.json)" # Corrected URL
+        api_url = "https://endoflife.date/api/python.json"  # Corrected URL
         print(f"Fetching latest Python version info from: {api_url}")
         headers = {'User-Agent': f'{constants.APP_NAME}/{constants.APP_VERSION}'}
         response = requests.get(api_url, timeout=10, headers=headers)
@@ -103,25 +104,22 @@ def _get_latest_python_version_from_api() -> str | None:
         
         if data and isinstance(data, list) and len(data) > 0:
             latest_cycle_info = None
-            # Iterate to find the newest cycle that is not EOL (eol: false)
-            # or the absolute newest if all are EOL (though unlikely for Python's main entry)
-            for cycle_info in data: # API sorts by release date, newest first
-                if isinstance(cycle_info.get("eol"), bool) and cycle_info["eol"] is False:
-                    latest_cycle_info = cycle_info
-                    break
-                # If no cycle has "eol: false", we might take the first one as the most recent.
-                # However, the API should ideally always have a current non-EOL for Python.
-                # If we only find EOL cycles, it's safer to indicate an issue or use a fallback.
+            latest_eol_date = None
             
-            if not latest_cycle_info and data: # Fallback to the very first entry if no "eol: false" found
-                print("Warning: Could not find a definitively non-EOL Python cycle from API, using the newest listed.", file=sys.stderr)
-                latest_cycle_info = data[0]
-
-
+            # Iterate to find the cycle with the furthest "eol" date
+            for cycle_info in data:  # API sorts by release date, newest first
+                eol_date_str = cycle_info.get("eol")
+                if eol_date_str:  # Check if "eol" date exists
+                    eol_date = datetime.fromisoformat(eol_date_str)
+                    if latest_eol_date is None or eol_date > latest_eol_date:
+                        latest_eol_date = eol_date
+                        latest_cycle_info = cycle_info
+            
             if latest_cycle_info and "latest" in latest_cycle_info:
                 latest_version_str = latest_cycle_info["latest"]
                 print(f"Latest stable Python version from API: {latest_version_str}")
                 return latest_version_str
+            
         print("Could not parse latest Python version from API response structure.", file=sys.stderr)
         return None
     except requests.exceptions.RequestException as e:
@@ -190,10 +188,10 @@ def install_python_interactive(version_or_url: str, download_dir: pathlib.Path) 
     installer_url = None
     if version_or_url.lower() == "latest":
         print("Attempting to find the latest Python installer URL...")
-        installer_url = get_latest_python_download_url() # Defaults to win64
+        installer_url = get_latest_python_download_url()  # Defaults to win64
     elif version_or_url.startswith("http://") or version_or_url.startswith("https://"):
         installer_url = version_or_url
-    else: 
+    else:
         # Assume version_or_url is a version string like "3.10.5"
         print(f"Attempting to find installer URL for Python version: {version_or_url}")
         installer_url = get_latest_python_download_url(version_str_override=version_or_url)
@@ -207,7 +205,7 @@ def install_python_interactive(version_or_url: str, download_dir: pathlib.Path) 
     if not (installer_name.endswith((".exe", ".pkg", ".dmg")) or "python_installer_downloaded" in installer_name):
         print(f"Warning: Download URL does not appear to point to a standard installer file: {installer_name}", file=sys.stderr)
         original_extension = pathlib.Path(installer_name).suffix
-        safe_version_or_url = re.sub(r'[^\w\.-]', '_', version_or_url) # Sanitize for filename
+        safe_version_or_url = re.sub(r'[^\w\.-]', '_', version_or_url)  # Sanitize for filename
         installer_name = f"python_installer_{safe_version_or_url}{original_extension if original_extension else '.exe'}"
         print(f"Using generic filename: {installer_name}")
 
@@ -227,21 +225,22 @@ def install_python_interactive(version_or_url: str, download_dir: pathlib.Path) 
     if os.name == 'nt':
         try:
             print(f"Attempting to launch installer: {installer_path}...")
-            os.startfile(installer_path) # This is for Windows
-            print("Installer launched. Please follow its instructions.")
+            # Use subprocess.run to launch the installer and wait for it to finish
+            subprocess.run([str(installer_path)], check=True)  # This will wait for the installer to finish
+            print("Installer finished. Please follow its instructions.")
         except Exception as e:
             print(f"Could not automatically launch the installer: {e}", file=sys.stderr)
             print(f"Please navigate to '{installer_path.parent}' and run '{installer_path.name}' manually.")
-    elif os.name == 'posix': # macOS
+    elif os.name == 'posix':  # macOS
         # For .pkg files on macOS, `open` command can be used
         if installer_path.suffix == '.pkg':
             print(f"Attempting to open installer with default application: {installer_path}")
-            system_utils.run_command(['open', str(installer_path)], check_return_code=False)
+            subprocess.run(['open', str(installer_path)], check=True)  # This will wait for the installer to finish
         else:
             print(f"Please run the downloaded installer from: {installer_path}")
     else:
         print(f"Please run the downloaded installer from: {installer_path}")
-    
+
     print("\nAfter installation, you might need to restart your terminal or KamekManager.")
     return True
 
@@ -302,6 +301,7 @@ def check_and_install_pip_packages(python_exe_path_str: str, packages: list[str]
     return all_successful
 
 def upgrade_python_interactive(old_python_exe_str: str, download_dir: pathlib.Path) -> bool:
+    skip_package_reinstallation = False
     print(f"--- Starting Python Upgrade Process for {old_python_exe_str} ---")
     old_python_info = check_python_installation(min_version=(0,0), specific_exe=old_python_exe_str) 
     if not old_python_info:
@@ -333,24 +333,43 @@ def upgrade_python_interactive(old_python_exe_str: str, download_dir: pathlib.Pa
     print("\n--- IMPORTANT ---")
     print("After the new Python installer finishes, please provide the path to the new python.exe")
     new_python_exe_str = ""
-    while True:
-        new_python_exe_str = input("Enter the full path to the new python.exe: ").strip().replace("\"", "") 
-        if not new_python_exe_str:
-            if system_utils.prompt_user_for_confirmation("Skip package reinstallation for now?"):
-                requirements_content = None 
-                break
-            else: continue
+
+    # Remove the while True loop
+    try:
+        # Run the command to get the directory of the current Python executable
+        result = subprocess.run(
+            ['python', '-c', 'import os, sys; print(os.path.dirname(sys.executable))'],
+            text=True,  # Use text=True for Python 3.7+, or use universal_newlines=True for older versions
+            capture_output=True,  # Capture stdout and stderr
+            check=True  # Raise an error if the command fails
+        )
+    
+        # Get the output and strip any extra whitespace
+        python_dir = result.stdout.strip()
+    
+        # Construct the new Python executable path
+        new_python_exe_str = f"{python_dir}\\python.exe"
+        print(f"Automatically determined new Python path: {new_python_exe_str}")
+    
+        # Check if the new Python executable is valid
         new_python_info_temp = get_python_executable_info(new_python_exe_str)
         if new_python_info_temp:
             if pathlib.Path(new_python_info_temp['executable']).resolve() == pathlib.Path(old_python_exe).resolve():
-                print("Error: The new Python path cannot be the same as the old Python path.", file=sys.stderr)
-                continue
+                print("The new Python path is the same as the old Python path. Skipping package reinstallation.")
+                skip_package_reinstallation = True
+                return True  # Exit the function since we don't need to confirm the path
             print(f"New Python identified: {new_python_info_temp['version_str']} at {new_python_info_temp['executable']}")
-            if not system_utils.prompt_user_for_confirmation(f"Is this correct?"):
-                continue
-            break
         else:
-            print(f"Path '{new_python_exe_str}' does not seem to be a valid Python executable. Please try again.")
+            print(f"Path '{new_python_exe_str}' does not seem to be a valid Python executable. Please check the installation.")
+            return False
+    
+    except subprocess.CalledProcessError as e:
+        print(f"Error while trying to determine the new Python path: {e}", file=sys.stderr)
+        return False
+
+    if skip_package_reinstallation:
+        print("Python upgrade process finished (new Python installed, package reinstallation skipped, same directory provided).")
+        return True
     if not new_python_exe_str and not requirements_content:
         print("Python upgrade process finished (new Python installed, package migration skipped).")
         return True
