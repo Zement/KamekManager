@@ -1,6 +1,4 @@
 # kamekmanager/core/__init__.py
-# This file makes Python treat the `core` directory as a package.
-
 from .system_utils import (
     check_admin_privileges,
     get_user_data_directory,
@@ -22,4 +20,9 @@ from .python_env import (
     check_and_install_pip_packages,
     get_latest_python_download_url, 
     update_pip 
+)
+
+from .toolchain_setup import ( 
+    check_devkitpro_installation,
+    install_devkitpro_interactive
 )
